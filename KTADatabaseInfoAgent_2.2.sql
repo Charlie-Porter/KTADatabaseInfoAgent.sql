@@ -10,26 +10,19 @@
 SET DEADLOCK_PRIORITY LOW;  
 GO  
 SET NOCOUNT ON
-
--- Basic SQL info
-SELECT @@VERSION AS Version, ServerProperty('ServerName') AS ServerName, ServerProperty('IsClustered') AS IsClustered, ServerProperty('IsHadrEnabled') AS AlwaysOnAGEnabled
-
+RAISERROR('Basic SQL version and edition info', 0, 1) WITH NOWAIT
 RAISERROR('Progress 1pc completed', 0, 1) WITH NOWAIT
-
-RAISERROR('Database Properties', 0, 1) WITH NOWAIT
+SELECT @@VERSION AS Version, ServerProperty('ServerName') AS ServerName, ServerProperty('IsClustered') AS IsClustered, ServerProperty('IsHadrEnabled') AS AlwaysOnAGEnabled
 SELECT d.*, dm.encryption_state
 FROM sys.databases AS d  
 LEFT JOIN sys.dm_database_encryption_keys dm ON d.database_id = dm.database_id
 
 RAISERROR('Progress 2pc completed', 0, 1) WITH NOWAIT
 
--- Check if any trace flags are enabled (notably 9481 enables LCE prior to new option in SQL Server 2016) (Requires membership in the public role)
-RAISERROR('DBCC TRACESTATUS', 0, 1) WITH NOWAIT
+RAISERROR('Check if any trace flags are enabled (notably 9481 enables LCE prior to new option in SQL Server 2016) (Requires membership in the public role)', 0, 1) WITH NOWAIT
 DBCC TRACESTATUS(-1)
 
-RAISERROR('Progress 3pc completed', 0, 1) WITH NOWAIT
--- Database file sizes and locations 
---(Requires permissions CREATE DATABASE, ALTER ANY DATABASE, or VIEW ANY DEFINITION)
+RAISERROR('Progress 3pc completed', 0, 1) WITH NOWAIT 
 RAISERROR('Database file sizes and permissions', 0, 1) WITH NOWAIT
 SELECT DB_NAME(database_id) AS DatabaseName,
 Name AS Logical_Name,
@@ -38,10 +31,7 @@ FROM sys.master_files
 ORDER BY size DESC
 
 RAISERROR('Progress 4pc completed', 0, 1) WITH NOWAIT
-
---(Requires permissions CREATE DATABASE, ALTER ANY DATABASE, or VIEW ANY DEFINITION)
---https://www.sqlskills.com/blogs/paul/how-to-examine-io-subsystem-latencies-from-within-sql-server/
-RAISERROR('Database file Read Latency by disk', 0, 1) WITH NOWAIT
+RAISERROR('Viewing Aggregate disk I/O latency Information - On well-configured storage which isn’t being overloaded I’d expect to see single-digit ms for either read or write latency.  Beware: This information is the aggregate of all I/Os performed since the database was brought online, so the I/O times reported by the script are averages. https://www.sqlskills.com/blogs/paul/how-to-examine-io-subsystem-latencies-from-within-sql-server/', 0, 1) WITH NOWAIT
 SELECT
     [ReadLatency] =
         CASE WHEN [num_of_reads] = 0
@@ -78,10 +68,7 @@ ORDER BY [WriteLatency] DESC;
 GO
 
 
--------------------------------
---Wait statistics with interval
--------------------------------
-  
+RAISERROR('This query shows a snapshot of 10 seconds of wait types.  If you see high waits types from this query (latch) and high aggregate read/write values from the above query, its a sign of sub system contention.  It could mean read and write hot spots and then drill into these database to see what’s going on and if its expected. If the data is fine, it could mean sub system contention - if so, the SAN admin may need to move those hot spot files to dedicated and/or faster storage      ', 0, 1) WITH NOWAIT
 IF EXISTS (SELECT * FROM [tempdb].[sys].[objects]
     WHERE [name] = N'##SQLStats1')
     DROP TABLE [##SQLStats1];
@@ -256,9 +243,8 @@ IF EXISTS (SELECT * FROM [tempdb].[sys].[objects]
     DROP TABLE [##SQLStats2];
 GO
 
-
 RAISERROR('Progress 5pc completed', 0, 1) WITH NOWAIT
-RAISERROR('Get table and index sizes', 0, 1) WITH NOWAIT
+RAISERROR('Checks size of platform databases.  The preference is to have well maintained databases, however, it is common for customers to have huge databases', 0, 1) WITH NOWAIT
 use [TotalAgility]
 EXEC  sp_msforeachtable 'EXEC sp_spaceused [?]' 
 RAISERROR('Progress 6pc completed', 0, 1) WITH NOWAIT
@@ -275,18 +261,71 @@ use [TotalAgility_Reporting_Staging]
 EXEC  sp_msforeachtable 'EXEC sp_spaceused [?]' 
 RAISERROR('Progress 10pc completed', 0, 1) WITH NOWAIT
 
---Who is connected from where using which authentication 
---(requires permission VIEW SERVER STATE)
-RAISERROR('Connections and connecting systems', 0, 1) WITH NOWAIT
+RAISERROR('Who is connected from where using which authentication ', 0, 1) WITH NOWAIT
 SELECT  S.login_name, C.auth_scheme, s.host_name, COUNT(*) AS Count
 FROM sys.dm_exec_connections AS C
 JOIN sys.dm_exec_sessions AS S ON C.session_id = S.session_id
 GROUP BY S.login_name, C.auth_scheme, s.host_name
 ORDER BY COUNT(*) DESC
 
-RAISERROR('Progress 11pc completed', 0, 1) WITH NOWAIT
 
-RAISERROR('Most blocked queries', 0, 1) WITH NOWAIT
+-- 
+RAISERROR('Gathering Database file(data/log) info - if the customer has log file issues, this is useful to know auto growth settings.  ', 0, 1) WITH NOWAIT
+-- Drop temporary table if it exists
+IF OBJECT_ID('tempdb..#info') IS NOT NULL
+       DROP TABLE #info;
+ 
+-- Create table to store database file information
+CREATE TABLE #DBAgentFileinfo (
+     databasename VARCHAR(128)
+     ,name VARCHAR(128)
+    ,fileid INT
+    ,filename VARCHAR(1000)
+    ,filegroup VARCHAR(128)
+    ,size VARCHAR(25)
+    ,maxsize VARCHAR(25)
+    ,growth VARCHAR(25)
+    ,usage VARCHAR(25));
+    
+-- Get database file information for each database   
+SET NOCOUNT ON; 
+INSERT INTO #DBAgentFileinfo
+EXEC sp_MSforeachdb ' 
+select ''?'',name,  fileid, filename,
+filegroup = filegroup_name(groupid),
+''size'' = convert(nvarchar(15), convert (bigint, size) * 8) + N'' KB'',
+''maxsize'' = (case maxsize when -1 then N''Unlimited''
+else
+convert(nvarchar(15), convert (bigint, maxsize) * 8) + N'' KB'' end),
+''growth'' = (case status & 0x100000 when 0x100000 then
+convert(nvarchar(15), growth) + N''%''
+else
+convert(nvarchar(15), convert (bigint, growth) * 8) + N'' KB'' end),
+''usage'' = (case status & 0x40 when 0x40 then ''log only'' else ''data only'' end)
+from sysfiles
+';
+
+-- Identify database files that use default auto-grow properties
+SELECT databasename 
+      ,name 
+      ,filename 
+      ,growth 
+	  ,fileid 
+	  ,filename
+	  ,filegroup
+	  ,size
+	  ,maxsize
+	  ,growth
+	  ,usage
+	  FROM #DBAgentFileinfo 
+ORDER BY databasename
+ 
+-- get rid of temp table 
+DROP TABLE #DBAgentFileinfo;
+
+
+RAISERROR('Progress 11pc completed', 0, 1) WITH NOWAIT
+RAISERROR('Most blocked queries - Should not see many queries or counts in here.. if so, the SQL has some blocking issues.', 0, 1) WITH NOWAIT
 SELECT TOP 10 
 [Average Time Blocked] = (total_elapsed_time - total_worker_time) / qs.execution_count ,
 [Total Time Blocked] = total_elapsed_time - total_worker_time ,
@@ -300,10 +339,8 @@ FROM sys.dm_exec_query_stats qs
 CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt 
 ORDER BY [Average Time Blocked] DESC
 
--- Troubleshoot permissions of current user if needed
 -- select * from fn_my_permissions(null, 'SERVER') UNION select * from fn_my_permissions(null, 'DATABASE') order by entity_name, subentity_name, permission_name
-
-RAISERROR('Progress 12pc completed', 0, 1) WITH NOWAIT
+RAISERROR('Troubleshoot permissions of current user if needed', 0, 1) WITH NOWAIT
 DECLARE @docdbname VARCHAR(32);
 DECLARE @tadbname VARCHAR(32);
 DECLARE @cmd NVARCHAR(MAX)
@@ -313,7 +350,7 @@ DECLARE @number_out INT
 DECLARE @ktaver INT
 DECLARE @bestpractices TABLE (propertyname VARCHAR(32), propertyvalue VARCHAR(32), warning VARCHAR(1000), num INT PRIMARY KEY)
 
-RAISERROR('TotalAgility MAXDOP settings', 0, 1) WITH NOWAIT
+RAISERROR('validate SQL/KTAs Best Practice guide settings', 0, 1) WITH NOWAIT
 -- START of MAXDOP recommended setting COUNT
 declare @hyperthreadingRatio bit
 declare @logicalCPUs int
@@ -787,14 +824,14 @@ RAISERROR('Progress 29pc completed', 0, 1) WITH NOWAIT
 SELECT * FROM [TotalAgility].[dbo].[DB_VERSION]
 
 --System Tasks
-RAISERROR('System Tasks', 0, 1) WITH NOWAIT
+RAISERROR('System Tasks informtion - check duedates/timeouts/intervals/status etc   ', 0, 1) WITH NOWAIT
 SELECT *
 FROM [TotalAgility].[dbo].WORKER_TASK AS wt WITH(NOLOCK)
 WHERE SYSTEM_LEVEL=1
 ORDER BY Task_type DESC
 
 -- Summary of non-system tasks
-RAISERROR('Summary of non-system tasks', 0, 1) WITH NOWAIT
+RAISERROR('Summary of non-system tasks -- its typcially not expected to have a backlog of worker tasks ', 0, 1) WITH NOWAIT
 SELECT NAME, ACTIVE, MIN(CREATED_DATE_TIME) AS MinCreated, MAX(CREATED_DATE_TIME) AS MaxCreated, COUNT(*) AS Tasks
 FROM [TotalAgility].[dbo].WORKER_TASK AS wt WITH(NOLOCK)
 WHERE SYSTEM_LEVEL=0
@@ -802,14 +839,14 @@ GROUP BY NAME, ACTIVE
 ORDER BY Tasks DESC
 
 -- Full of non-system worker tasks
-RAISERROR('Full non-system worker tasks', 0, 1) WITH NOWAIT
+RAISERROR('Full non-system worker tasks - can be useful to have some worker task DATA XML eg check job ids', 0, 1) WITH NOWAIT
 SELECT top 1000 *
 FROM [TotalAgility].[dbo].WORKER_TASK AS wt WITH(NOLOCK)
 WHERE SYSTEM_LEVEL=0
 ORDER BY due_date_time DESC
 
 -- Find Large jobs in main TA DB 
-RAISERROR('Large jobs in main TA DB', 0, 1) WITH NOWAIT
+RAISERROR('Large jobs in main TA DB -  over 100k history I would start to be concerned. likely caused by invalid process logic - never ending loops', 0, 1) WITH NOWAIT
 SELECT jh.JOB_ID, j.JOB_STATUS, COUNT(*) AS HistoryCount
 FROM [TotalAgility].[dbo].[JOB_HISTORY] AS jh with(nolock)
 join [TotalAgility].[dbo].[JOB] AS j with(nolock) ON j.JOB_ID = jh.JOB_ID
@@ -853,7 +890,7 @@ END
 	
 RAISERROR('Progress 31pc completed', 0, 1) WITH NOWAIT
 -- Processes that contain Sleep nodes
-RAISERROR('Processes that contain Sleep nodes', 0, 1) WITH NOWAIT
+RAISERROR('Processes that contain Sleep nodes - below 7.8, if many are active at the same time, it could comsume all (16 default) activity threads.  No other activities would be progressed at this time.', 0, 1) WITH NOWAIT
 SELECT c.NAME AS CategoryName, bp.PROCESS_NAME, bp.VERSION, a.ACTIVITY_NAME, a.SLEEP_PERIOD_IN_SECONDS
 FROM [TotalAgility].[dbo].BUSINESS_PROCESS AS bp WITH(NOLOCK)
 INNER JOIN [TotalAgility].[dbo].ACTIVITY AS a WITH(NOLOCK) ON bp.PROCESS_ID=a.PROCESS_ID AND bp.VERSION=a.VERSION
@@ -861,10 +898,9 @@ LEFT JOIN [TotalAgility].[dbo].CATEGORY AS c WITH(NOLOCK) ON c.CATEGORY_ID=bp.CA
 WHERE a.ACTIVITY_TYPE=16 
 
 
-
 RAISERROR('Progress 32pc completed', 0, 1) WITH NOWAIT
 --Lingering KFS Pages data
-RAISERROR('Lingering KFS Pages data', 0, 1) WITH NOWAIT
+RAISERROR('Lingering KFS Pages data - In early versions, the device clean up system task would not delete orphan binaries ', 0, 1) WITH NOWAIT
 SELECT COUNT(*) AS KFSPages,
 CAST(ROUND(SUM(DATALENGTH(kp.ORIGINALFILE))/1024.0/1024.0,3) AS numeric(36,3)) AS OriginalMB,
 CAST(ROUND(SUM(DATALENGTH(kp.PROCESSEDFILE))/1024.0/1024.0,3) AS numeric(36,3)) AS ProcessedMB,
@@ -873,7 +909,7 @@ CAST(ROUND(SUM(DATALENGTH(kp.PREVIEWFILE))/1024.0/1024.0,3) AS numeric(36,3)) AS
 FROM [TotalAgility].[dbo].KFS_PAGE AS kp WITH(NOLOCK) 
 
 --Online learning folder mappings
-RAISERROR('Online learning folder mappings', 0, 1) WITH NOWAIT
+RAISERROR('Online learning folder mappings - used to check capture projects with OL enabled  ', 0, 1) WITH NOWAIT
 SELECT co.NAME, co.VERSION, co.LAST_MODIFIED_DATE,
 	CASE 
 		WHEN co.OBJECT_TYPE=0 THEN 'Shared'
@@ -891,7 +927,7 @@ ORDER BY co.LAST_MODIFIED_DATE
 
 RAISERROR('Progress 33pc completed', 0, 1) WITH NOWAIT
 --Transformation project and training size
-RAISERROR('Transformation project and training size', 0, 1) WITH NOWAIT
+RAISERROR('Transformation project and training size - eg useful to know if importing packages is taking a while', 0, 1) WITH NOWAIT
 SELECT co.ID, 
 CASE 
 	WHEN co.OBJECT_TYPE=0 THEN 'Shared'
@@ -915,7 +951,7 @@ CAST(ROUND((DATALENGTH(t.TRAINING_SETS_ZIP))/1024.0/1024.0,3) AS numeric(36,3)) 
 ORDER BY SizeMB DESC
 
 RAISERROR('Progress 40pc completed', 0, 1) WITH NOWAIT
---Empty folders
+RAISERROR('To check empty folders - in early versions empty folders are not deleted by retention and could cause slow db response', 0, 1) WITH NOWAIT
 IF @ktaver < 8
 	BEGIN
 	RAISERROR('Empty folders for KTA 7.7 and below', 0, 1) WITH NOWAIT
@@ -937,7 +973,7 @@ END
 
 RAISERROR('Progress 41pc completed', 0, 1) WITH NOWAIT
 
-RAISERROR('Retentio Policy settings', 0, 1) WITH NOWAIT
+RAISERROR('Retentio Policy settings - useful to know if they have unmanaged jobs/docuents and disk space issues', 0, 1) WITH NOWAIT
 
 DECLARE @year INT
 DECLARE @month INT
@@ -1012,7 +1048,9 @@ DECLARE @NumberRecords int, @RowCount int, @ID binary(16)
 DECLARE @FinJobRetentionPolicy TABLE (ProcessName NVARCHAR(64), KeepForever VARCHAR(64),RetentionDate datetime, NumberOfFinJobs numeric )
 
 INSERT INTO @TempBusinessProcessIds 
-SELECT b.PROCESS_ID FROM [TotalAgility].[dbo].[BUSINESS_PROCESS] AS b WITH (NOLOCK) where process_type = 0 and LATEST_VERSION = 1 group by PROCESS_ID
+SELECT b.PROCESS_ID FROM [TotalAgility].[dbo].[BUSINESS_PROCESS] AS b WITH (NOLOCK) where process_type = 0 
+and version = (select max(version) from business_process where process_id = b.process_id)  
+group by PROCESS_ID
 
 -- Get the number of records in the temporary table
 select @NumberRecords = COUNT(*) from @TempBusinessProcessIds
@@ -1194,8 +1232,8 @@ BEGIN
 END
 RAISERROR('Progress 43pc completed', 0, 1) WITH NOWAIT
 
---The below query will get a list of Live Auto Activities grouped by status
-RAISERROR('Get Pending Live Auto Activities by status ', 0, 1) WITH NOWAIT
+
+RAISERROR('Get Pending Live Auto Activities by status - This query will get a list of Live Auto Activities grouped by status, so you can check what acticities are in the pending/locked/taken/suspended  ', 0, 1) WITH NOWAIT
 select P.POOLNAME, PROCESS_NAME, NODE_NAME, TYPE,
 CASE ACTIVITY_STATUS
 WHEN -1 THEN 'Completed'
@@ -1218,7 +1256,7 @@ group by P.POOLNAME, PROCESS_NAME, NODE_NAME, ACTIVITY_STATUS, AUTOMATIC, PRIORI
 order by count desc
 RAISERROR('Progress 44pc completed', 0, 1) WITH NOWAIT
 --The below query will get a list of Threadpools
-RAISERROR('List of Threadpools', 0, 1) WITH NOWAIT
+RAISERROR('List of Threadpools - this is the number of acticity threads  - how many activities each core worker can take concurrently', 0, 1) WITH NOWAIT
 select * from [TotalAgility].[dbo].[THREADPOOL] P
 
 RAISERROR('Progress 45pc completed', 0, 1) WITH NOWAIT
@@ -1257,7 +1295,7 @@ IF @ktaver < 8
     AND NOT EXISTS (SELECT 1 FROM [TotalAgility_Documents].[dbo].Extension WITH(NOLOCK) WHERE FileId = b.FileId)
 	END
 	
-RAISERROR('latest job notes with errors ', 0, 1) WITH NOWAIT
+RAISERROR('latest job notes with errors - just to get a quick snap shot of why recent jobs are suspending ', 0, 1) WITH NOWAIT
 select JOB_id, RESOURCE_ID, CREATION_DATE, CREATION_DATE_MILLISECS, NOTE_TYPE_ID, JOB_NOTE  
 from
 (select top 100 JOB_id, RESOURCE_ID, CREATION_DATE, CREATION_DATE_MILLISECS, NOTE_TYPE_ID, JOB_NOTE  
@@ -1271,7 +1309,7 @@ where  job_note like '%error%' order by CREATION_DATE desc
 order by CREATION_DATE desc 
 
 RAISERROR('Progress 46pc completed', 0, 1) WITH NOWAIT
-RAISERROR('Top 25 queries from SQL cache worker time ', 0, 1) WITH NOWAIT
+RAISERROR('Top 25 queries from SQL cache worker time - Good to know if SQL has sub optimal plans', 0, 1) WITH NOWAIT
 SELECT TOP (25)  CONVERT(VARCHAR(30),DB_NAME(qp.dbid)) AS DatabaseName, REPLACE(REPLACE(ISNULL( st.text, ''), CHAR(13), ''), CHAR(10), ' ') AS Query, qs.total_worker_time, qs.execution_count, qs.max_elapsed_time, qs.max_worker_time,
 qs.last_grant_kb, qs.last_ideal_grant_kb, qs.max_grant_kb, qs.max_ideal_grant_kb, qs.max_rows, qs.min_used_grant_kb, qs.total_used_grant_kb, qp.query_plan
 FROM sys.dm_exec_query_stats AS qs
@@ -1282,7 +1320,7 @@ OR qs.max_elapsed_time > 300
 order by qs.max_worker_time  desc
 
 RAISERROR('Progress 47pc completed', 0, 1) WITH NOWAIT
-RAISERROR('Top 25 queries from SQL cache by max grant size ', 0, 1) WITH NOWAIT
+RAISERROR('Top 25 queries from SQL cache by max grant size -  Good to know if SQL has sub optimal plans', 0, 1) WITH NOWAIT
 SELECT TOP (25)  CONVERT(VARCHAR(30),DB_NAME(qp.dbid)) AS DatabaseName, REPLACE(REPLACE(ISNULL( st.text, ''), CHAR(13), ''), CHAR(10), ' ') AS Query, qs.total_worker_time, qs.execution_count, qs.max_elapsed_time, qs.max_worker_time,
 qs.last_grant_kb, qs.last_ideal_grant_kb, qs.max_grant_kb, qs.max_ideal_grant_kb, qs.max_rows, qs.min_used_grant_kb, qs.total_used_grant_kb, qp.query_plan
 FROM sys.dm_exec_query_stats AS qs
@@ -1293,7 +1331,7 @@ OR qs.max_elapsed_time > 300
 order by qs.max_grant_kb  desc
 
 RAISERROR('Progress 48pc completed', 0, 1) WITH NOWAIT
---Get Online learning details from database
+RAISERROR('Get Online learning details from database to see if OL is functional or has a backlog of samples ..  if the OL temp has many samples, it means TS is unable to progress them and can lead to SQL contention', 0, 1) WITH NOWAIT
 IF @ktaver < 8
         BEGIN
         RAISERROR('Get Online learning 7.7 or below details from database ', 0, 1) WITH NOWAIT
@@ -1382,10 +1420,9 @@ IF @ktaver < 8
 RAISERROR('Progress 50pc completed', 0, 1) WITH NOWAIT
 
 
-RAISERROR('Progress 60pc completed', 0, 1) WITH NOWAIT
+RAISERROR('This will check the TotalAgility DB index sizes and fragmentation-  note: Its quite normal for the TA db to have high fragmentation since its primary keys are GUIDs which will quickly get fragmented. This doesnt typically cause any problems.', 0, 1) WITH NOWAIT
 
 use [TotalAgility]
--- Ensure a USE  statement has been executed first.
 SELECT [DatabaseName]
     ,[ObjectId]
     ,[ObjectName]
@@ -1416,7 +1453,7 @@ GROUP BY DatabaseName
     ,lastupdated
     ,AvgFragmentationInPercent
 
-RAISERROR('Progress 70pc completed', 0, 1) WITH NOWAIT
+RAISERROR('This will check the TotalAgility Documents DB index sizes - in KTA 7.7 or below, its primary keys are GUIDs so will get high fragmentation quickly.  In the new data layer in 7.8 or above, this is not the case. ', 0, 1) WITH NOWAIT
 use [TotalAgility_Documents]
 
 SELECT [DatabaseName]
