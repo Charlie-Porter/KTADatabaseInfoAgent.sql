@@ -7,6 +7,9 @@
 --For OPMT, replace all [dbo] with [live] or [dev] as per the OPMT deployment type.
 --Then right click on the query window, Results To, and select "Results to file" 
 --Once the queries complete, please attach the results RPT file to your Kofax Support case  
+DECLARE @SkipDBSizes INT = 1; --update to 0 if you want to gather DB sizes (this can be a while to complete)  
+DECLARE @SkipFragmentationSizes INT = 1; --update to 0 if you want to gather DB sizes (this can be a while to complete)
+
 SET DEADLOCK_PRIORITY LOW;  
 GO  
 SET NOCOUNT ON
@@ -243,6 +246,9 @@ IF EXISTS (SELECT * FROM [tempdb].[sys].[objects]
     DROP TABLE [##SQLStats2];
 GO
 
+IF @SkipDBSizes = 1
+    GOTO SkipCheckDBSizes;
+
 RAISERROR('Progress 5pc completed', 0, 1) WITH NOWAIT
 RAISERROR('Checks size of platform databases.  The preference is to have well maintained databases, however, it is common for customers to have huge databases', 0, 1) WITH NOWAIT
 use [TotalAgility]
@@ -259,6 +265,9 @@ EXEC  sp_msforeachtable 'EXEC sp_spaceused [?]'
 RAISERROR('Progress 9pc completed', 0, 1) WITH NOWAIT
 use [TotalAgility_Reporting_Staging]
 EXEC  sp_msforeachtable 'EXEC sp_spaceused [?]' 
+
+SkipCheckDBSizes:
+
 RAISERROR('Progress 10pc completed', 0, 1) WITH NOWAIT
 
 RAISERROR('Who is connected from where using which authentication ', 0, 1) WITH NOWAIT
@@ -1419,7 +1428,8 @@ IF @ktaver < 8
     END
 RAISERROR('Progress 50pc completed', 0, 1) WITH NOWAIT
 
-
+IF SkipFragmentationSizes = 1
+    GOTO SkipCheckFragmentationSizes
 RAISERROR('This will check the TotalAgility DB index sizes and fragmentation-  note: Its quite normal for the TA db to have high fragmentation since its primary keys are GUIDs which will quickly get fragmented. This doesnt typically cause any problems.', 0, 1) WITH NOWAIT
 
 use [TotalAgility]
@@ -1485,6 +1495,8 @@ GROUP BY DatabaseName
     ,IndexDescription
     ,lastupdated
     ,AvgFragmentationInPercent
+
+SkipCheckFragmentationSizes:
 
 RAISERROR('Progress 100pc completed', 0, 1) WITH NOWAIT
 
