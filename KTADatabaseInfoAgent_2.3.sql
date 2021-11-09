@@ -7,11 +7,11 @@
 --For OPMT, replace all [dbo] with [live] or [dev] as per the OPMT deployment type.
 --Then right click on the query window, Results To, and select "Results to file" 
 --Once the queries complete, please attach the results RPT file to your Kofax Support case  
-DECLARE @SkipDBSizes INT = 1; --update to 0 if you want to gather DB sizes (this can be a while to complete)  
-DECLARE @SkipFragmentationSizes INT = 1; --update to 0 if you want to gather DB sizes (this can be a while to complete)
 
-SET DEADLOCK_PRIORITY LOW;  
-GO  
+DECLARE @skipdbsizes INT = 1;  --set to 0 if you want to gather DB sizes (this can be a while to complete)
+DECLARE @skipfragmentationsizes INT = 1 --set to 0 if you want to gather DB sizes (this can be a while to complete)
+
+SET DEADLOCK_PRIORITY LOW;    
 SET NOCOUNT ON
 RAISERROR('Basic SQL version and edition info', 0, 1) WITH NOWAIT
 RAISERROR('Progress 1pc completed', 0, 1) WITH NOWAIT
@@ -68,7 +68,6 @@ JOIN sys.master_files AS [mf]
 -- ORDER BY [Latency] DESC
 --ORDER BY [ReadLatency] DESC
 ORDER BY [WriteLatency] DESC;
-GO
 
 
 RAISERROR('This query shows a snapshot of 10 seconds of wait types.  If you see high waits types from this query (latch) and high aggregate read/write values from the above query, its a sign of sub system contention.  It could mean read and write hot spots and then drill into these database to see what’s going on and if its expected. If the data is fine, it could mean sub system contention - if so, the SAN admin may need to move those hot spot files to dedicated and/or faster storage      ', 0, 1) WITH NOWAIT
@@ -79,22 +78,19 @@ IF EXISTS (SELECT * FROM [tempdb].[sys].[objects]
 IF EXISTS (SELECT * FROM [tempdb].[sys].[objects]
     WHERE [name] = N'##SQLStats2')
     DROP TABLE [##SQLStats2];
-GO
   
 SELECT [wait_type], [waiting_tasks_count], [wait_time_ms],
        [max_wait_time_ms], [signal_wait_time_ms]
 INTO ##SQLStats1
 FROM sys.dm_os_wait_stats;
-GO
-  
+
 WAITFOR DELAY '00:00:10';
-GO
-  
+
 SELECT [wait_type], [waiting_tasks_count], [wait_time_ms],
        [max_wait_time_ms], [signal_wait_time_ms]
 INTO ##SQLStats2
 FROM sys.dm_os_wait_stats;
-GO
+
   
 WITH [DiffWaits] AS
 (SELECT
@@ -234,7 +230,6 @@ INNER JOIN [Waits] AS [W2]
 GROUP BY [W1].[RowNum], [W1].[wait_type], [W1].[WaitS],
     [W1].[ResourceS], [W1].[SignalS], [W1].[WaitCount], [W1].[Percentage]
 HAVING SUM ([W2].[Percentage]) - [W1].[Percentage] < 95; -- percentage threshold
-GO
   
 -- Cleanup
 IF EXISTS (SELECT * FROM [tempdb].[sys].[objects]
@@ -244,10 +239,9 @@ IF EXISTS (SELECT * FROM [tempdb].[sys].[objects]
 IF EXISTS (SELECT * FROM [tempdb].[sys].[objects]
     WHERE [name] = N'##SQLStats2')
     DROP TABLE [##SQLStats2];
-GO
 
-IF @SkipDBSizes = 1
-    GOTO SkipCheckDBSizes;
+IF @skipdbsizes > 0
+    GOTO skipdbsizes;
 
 RAISERROR('Progress 5pc completed', 0, 1) WITH NOWAIT
 RAISERROR('Checks size of platform databases.  The preference is to have well maintained databases, however, it is common for customers to have huge databases', 0, 1) WITH NOWAIT
@@ -266,7 +260,7 @@ RAISERROR('Progress 9pc completed', 0, 1) WITH NOWAIT
 use [TotalAgility_Reporting_Staging]
 EXEC  sp_msforeachtable 'EXEC sp_spaceused [?]' 
 
-SkipCheckDBSizes:
+skipdbsizes:
 
 RAISERROR('Progress 10pc completed', 0, 1) WITH NOWAIT
 
@@ -1058,7 +1052,7 @@ DECLARE @FinJobRetentionPolicy TABLE (ProcessName NVARCHAR(64), KeepForever VARC
 
 INSERT INTO @TempBusinessProcessIds 
 SELECT b.PROCESS_ID FROM [TotalAgility].[dbo].[BUSINESS_PROCESS] AS b WITH (NOLOCK) where process_type = 0 
-and version = (select max(version) from business_process where process_id = b.process_id)  
+and version = (select max(version) from [TotalAgility].[dbo].[BUSINESS_PROCESS] where process_id = b.process_id)  
 group by PROCESS_ID
 
 -- Get the number of records in the temporary table
@@ -1428,8 +1422,8 @@ IF @ktaver < 8
     END
 RAISERROR('Progress 50pc completed', 0, 1) WITH NOWAIT
 
-IF SkipFragmentationSizes = 1
-    GOTO SkipCheckFragmentationSizes
+IF @skipfragmentationsizes = 1
+    GOTO skipfragmentationsizes
 RAISERROR('This will check the TotalAgility DB index sizes and fragmentation-  note: Its quite normal for the TA db to have high fragmentation since its primary keys are GUIDs which will quickly get fragmented. This doesnt typically cause any problems.', 0, 1) WITH NOWAIT
 
 use [TotalAgility]
@@ -1496,7 +1490,7 @@ GROUP BY DatabaseName
     ,lastupdated
     ,AvgFragmentationInPercent
 
-SkipCheckFragmentationSizes:
+skipfragmentationsizes:
 
 RAISERROR('Progress 100pc completed', 0, 1) WITH NOWAIT
 
