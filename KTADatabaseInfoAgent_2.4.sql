@@ -983,6 +983,7 @@ DECLARE @month INT
 DECLARE @day INT
 DECLARE @date datetime = getdate()
 DECLARE @RetentionPolicy TABLE (RetentionPropertyName VARCHAR(64), KeepForever VARCHAR(64),PropertyValue VARCHAR(64))
+DECLARE @version INT
 
 INSERT INTO @RetentionPolicy (RetentionPropertyName, KeepForever, PropertyValue)
 VALUES ('KeepAllFormVersions',
@@ -1046,14 +1047,14 @@ select * from @RetentionPolicy
 
 RAISERROR('Number of jobs to delete with Retention Policy enabled', 0, 1) WITH NOWAIT
 
-DECLARE @TempBusinessProcessIds TABLE (Id binary(16))
+DECLARE @TempBusinessProcessIds TABLE (Id binary(16), version int)
 DECLARE @NumberRecords int, @RowCount int, @ID binary(16)
 DECLARE @FinJobRetentionPolicy TABLE (ProcessName NVARCHAR(64), KeepForever VARCHAR(64),RetentionDate datetime, NumberOfFinJobs numeric )
 
 INSERT INTO @TempBusinessProcessIds 
-SELECT b.PROCESS_ID FROM [TotalAgility].[dbo].[BUSINESS_PROCESS] AS b WITH (NOLOCK) where process_type = 0 
+SELECT b.PROCESS_ID, b.version FROM [TotalAgility].[dbo].[BUSINESS_PROCESS] AS b WITH (NOLOCK) where process_type = 0 
 and version = (select max(version) from [TotalAgility].[dbo].[BUSINESS_PROCESS] where process_id = b.process_id)  
-group by PROCESS_ID
+group by b.PROCESS_ID, b.version
 
 -- Get the number of records in the temporary table
 select @NumberRecords = COUNT(*) from @TempBusinessProcessIds
@@ -1061,14 +1062,15 @@ PRINT   @NumberRecords
 
 WHILE @NumberRecords > 0
 BEGIN
-    SET @ID = (SELECT TOP 1 id FROM @TempBusinessProcessIds);
+    SET @ID = (SELECT TOP 1 id FROM @TempBusinessProcessIds);   
+    SET @version = (SELECT TOP 1 version FROM @TempBusinessProcessIds); 
 	SET @year =0
     SET @month =0
     SET @day =0
     SET @date = GETDATE()
-    SET @year = (SELECT top 1  SETTINGS_XML.value('(/BusinessProcessSettings/RetentionPolicySettings/RetentionPolicyDuration/Years)[1]', 'INT') from [TotalAgility].[dbo].[BUSINESS_PROCESS] with(nolock) where process_id = @id)
-    SET @month = (SELECT top 1  SETTINGS_XML.value('(/BusinessProcessSettings/RetentionPolicySettings/RetentionPolicyDuration/Months)[1]', 'INT') from [TotalAgility].[dbo].[BUSINESS_PROCESS] with(nolock) where process_id = @id)
-    SET @day = (SELECT top 1  SETTINGS_XML.value('(/BusinessProcessSettings/RetentionPolicySettings/RetentionPolicyDuration/Days)[1]', 'INT') from [TotalAgility].[dbo].[BUSINESS_PROCESS] with(nolock) where process_id = @id)
+    SET @year = (SELECT top 1  SETTINGS_XML.value('(/BusinessProcessSettings/RetentionPolicySettings/RetentionPolicyDuration/Years)[1]', 'INT') from [TotalAgility].[dbo].[BUSINESS_PROCESS] with(nolock) where process_id = @id and version = @version) 
+    SET @month = (SELECT top 1  SETTINGS_XML.value('(/BusinessProcessSettings/RetentionPolicySettings/RetentionPolicyDuration/Months)[1]', 'INT') from [TotalAgility].[dbo].[BUSINESS_PROCESS] with(nolock) where process_id = @id and version = @version)
+    SET @day = (SELECT top 1  SETTINGS_XML.value('(/BusinessProcessSettings/RetentionPolicySettings/RetentionPolicyDuration/Days)[1]', 'INT') from [TotalAgility].[dbo].[BUSINESS_PROCESS] with(nolock) where process_id = @id and version = @version)
     SET @date = DATEADD(YEAR,-@year,@date);
     SET @date = DATEADD(MONTH,-@month,@date);
     SET @date = DATEADD(DAY,-@day,@date);
@@ -1076,7 +1078,7 @@ BEGIN
 	VALUES 
 	(
 	(SELECT top 1 process_name from [TotalAgility].[dbo].BUSINESS_PROCESS with(nolock) where process_id = @id)
-	,(SELECT top 1  SETTINGS_XML.value('(/BusinessProcessSettings/RetentionPolicySettings/KeepForever)[1]', 'varchar(64)') from [TotalAgility].[dbo].[BUSINESS_PROCESS] with(nolock) where process_id = @id)
+	,(SELECT top 1  SETTINGS_XML.value('(/BusinessProcessSettings/RetentionPolicySettings/KeepForever)[1]', 'varchar(64)') from [TotalAgility].[dbo].[BUSINESS_PROCESS] with(nolock) where process_id = @id and version = @version)
 	,@date
     ,(SELECT  count(*) from [TotalAgility_FinishedJobs].[dbo].Finished_job with(nolock) where FINISH_TIME < @date and process_id = @id)
 	);
